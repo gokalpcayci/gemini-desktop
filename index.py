@@ -7,6 +7,7 @@ from playwright.sync_api import Page, sync_playwright
 from google import genai
 from google.genai import types
 from google.genai.types import Content, Part
+from google.genai.errors import ClientError
 
 
 # Recommended screen dimensions for Computer Use
@@ -205,19 +206,56 @@ def get_function_responses(page: Page, results: List[Tuple[str, Dict[str, Any], 
 
 
 def run_agent_loop(client: genai.Client, page: Page, user_goal: str, excluded_functions: Optional[List[str]] = None) -> None:
-    # ... (code before the loop is fine) ...
+    print(f"\nGoal: {user_goal}")
+    excluded = excluded_functions or []
+
+    # Configure Computer Use tool
+    config = types.GenerateContentConfig(
+        tools=[
+            types.Tool(
+                computer_use=types.ComputerUse(
+                    environment=types.Environment.ENVIRONMENT_BROWSER,
+                    excluded_predefined_functions=excluded,
+                )
+            )
+        ],
+    )
+
+    # Initial state
+    initial_screenshot = page.screenshot(type="png")
+    contents: List[Content] = [
+        Content(
+            role="user",
+            parts=[
+                Part(text=user_goal),
+                Part.from_bytes(data=initial_screenshot, mime_type="image/png"),
+            ],
+        )
+    ]
 
     turn_limit = 10
     for i in range(turn_limit):
         print(f"\n--- Turn {i + 1} ---")
-        
-        # ✅ START OF CORRECTED BLOCK
-        # This whole section must be indented to be INSIDE the loop
-        response = client.models.generate_content(
-            model="gemini-2.5-computer-use-preview-10-2025",
-            contents=contents,
-            config=config,
-        )
+        # Generate next action(s) from the model
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-computer-use-preview-10-2025",
+                contents=contents,
+                config=config,
+            )
+        except ClientError as e:
+            message = str(e)
+            print("\nGemini API error:", message)
+            if "RESOURCE_EXHAUSTED" in message or "429" in message:
+                print(
+                    "\nQuota exceeded for Computer Use preview. Please:\n"
+                    "- Enable billing or upgrade your plan for the project owning GOOGLE_API_KEY\n"
+                    "- Verify access/quota for 'gemini-2.5-computer-use-preview-10-2025'\n"
+                    "- See rate limits: https://ai.google.dev/gemini-api/docs/rate-limits\n"
+                    "- Check usage: https://ai.dev/usage?tab=rate-limit\n"
+                    "You can also try the Browserbase demo: http://gemini.browserbase.com\n"
+                )
+            return
 
         candidate = response.candidates[0]
         contents.append(candidate.content)
@@ -240,7 +278,6 @@ def run_agent_loop(client: genai.Client, page: Page, user_goal: str, excluded_fu
 
         if terminated:
             break
-        # ✅ END OF CORRECTED BLOCK
 
 
 def main() -> None:
